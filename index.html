@@ -105,6 +105,9 @@ function targetWithName(img, label) {
   return { canvas: c, paintingRows: (cols) => Math.min(Math.round(cols * ph / width), 9999) };
 }
 
+// 絵Bのマスの縦の数（とても縦長なら2マス）
+function revealRows(img) { return Math.max(0.3, img.naturalWidth / img.naturalHeight) < 0.7 ? 2 : 1; }
+
 // 組み立ての途中で、画面を描く時間をゆずる（その間も絵Bが見え、指の操作も止まらない）
 const breathe = () => new Promise(r => setTimeout(r, 0));
 
@@ -166,8 +169,7 @@ async function buildMosaic(targetImg, bImg) {
   for (let i = 0; i < cols * rows; i++) colors.push([px[i * 4], px[i * 4 + 1], px[i * 4 + 2]]);
 
   // 絵Bの範囲
-  const bAspect = Math.max(0.3, bImg.naturalWidth / bImg.naturalHeight);
-  const bh = bAspect < 0.7 ? 2 : 1;
+  const bh = revealRows(bImg);
   const bc = document.createElement('canvas'); bc.width = 6; bc.height = 8;
   bc.getContext('2d').drawImage(bImg, 0, 0, 6, 8);
   const bd = bc.getContext('2d').getImageData(0, 0, 6, 8).data;
@@ -318,7 +320,9 @@ function render() {
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
   if (!L) {
     // 組み立て中も、絵Bだけは先に出しておく
-    if (revealImg) { const w = W, h = w * revealImg.naturalHeight / revealImg.naturalWidth; drawReveal(ctx, 0, (H - h) / 2, w, h); }
+    // モザイクができた時の最初の見え方（Bのマス＝幅いっぱい・縦長なら縦2マス・画面の真ん中）と同じ大きさ・位置に描く
+    // （2026-11-09 実機：前は絵の形のまま描いていたので、モザイクができた瞬間に絵がアップになって見えた）
+    if (revealImg) { const h = W * revealRows(revealImg); drawReveal(ctx, 0, H / 2 - h / 2, W, h); }
     return;
   }
   const devCell = cell * DPR;
