@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>Museum</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+</style>
+</head>
+<body>
+<canvas id="mosaic"></canvas>
+<script>
+// 美術館（Turing MUSEUM）の相手のスマホ用ページ（2026-11-07、2026-11-08 展示40点＋タイル専用に合わせた。NAMES と TILE_ONLY は build.py が書き換える）。
+// アドレスの # の後ろ：選んだ絵A＋最初に見せる絵B（例 #a03p11a03p110）。小文字と数字だけ、同じものを2回、最後に「0」
+// 最初は絵Bが画面の幅いっぱい。指を縮めていくと、Bのまま小さくなり、Bはモザイクの一部で、全体はAのモザイク。下に名前もモザイク。
+// 作り方はアプリ（MagicMuseumKit/MosaicLayout.swift）と同じ：
+//  タイル＝A・B以外の作品を部分ごとに切り出したもの（1作品32枚）。色の近い上位10枚から散らす・使った回数が多いほど選ばれにくい・
+//  2マス以内に同じ作品を置かない・マスの色を0.5で重ねる・Bは1マス（とても縦長なら縦2マス）に置く（縮めるほどAの色を重ねる）。横140マス
+const NAMES = {"a01": "モナ・リザ", "a02": "真珠の耳飾りの少女", "a04": "ひまわり", "a05": "叫び", "a09": "大谷鬼次の\n江戸兵衛", "a11": "ヴィーナスの誕生", "a14": "夜警", "a16": "接吻", "a18": "民衆を導く\n自由の女神", "a19": "落穂拾い", "a42": "エトワール", "a44": "タヒチの女たち", "a22": "ムーラン・ド・ラ・\nギャレット", "a31": "アテナイの学堂", "a33": "バベルの塔", "a45": "黄道十二宮", "a23": "印象・日の出", "a20": "グランド・ジャット島の\n日曜日の午後", "a51": "黄色いセーターの\nジャンヌ", "a52": "ダンス", "p09": "ナポレオン", "p10": "リンカーン", "p11": "アインシュタイン", "p13": "ベートーヴェン", "p15": "シェイクスピア", "p16": "ダ・ヴィンチ", "p19": "マリー・\nアントワネット", "p45": "ダーウィン", "p46": "エジソン", "p47": "ナイチンゲール", "p01": "織田信長", "p02": "豊臣秀吉", "p03": "徳川家康", "p04": "坂本龍馬", "p07": "夏目漱石", "p29": "宮本武蔵", "p21": "聖徳太子", "p74": "土方歳三", "p80": "芥川龍之介", "p81": "正岡子規"};
+const TILE_ONLY = ["a03", "a06", "a07", "a08", "a10", "a12", "a13", "a15", "a17", "a21", "a24", "a25", "a26", "a27", "a28", "a29", "a30", "a32", "a34", "a35", "a36", "a37", "a38", "a39", "a40", "a41", "a43", "a46", "a47", "a48", "a49", "a50", "p05", "p06", "p08", "p12", "p14", "p17", "p18", "p20", "p22", "p23", "p24", "p25", "p26", "p27", "p28", "p30", "p31", "p32", "p33", "p34", "p35", "p36", "p37", "p38", "p39", "p40", "p41", "p42", "p43", "p44", "p48", "p49", "p50", "p51", "p52", "p53", "p54", "p55", "p56", "p57", "p58", "p59", "p60", "p61", "p62", "p63", "p64", "p65", "p66", "p67", "p68", "p69", "p70", "p71", "p72", "p73", "p75", "p76", "p77", "p78", "p79", "p82"];
+const IDS = Object.keys(NAMES);
+const TILE_ONLY_SET = new Set(TILE_ONLY);
+const MAX_TILES = 2400;
+const COLUMNS = 140, OVERLAY = 0.5, K = 10, BW = 1;
+
+function parseHash() {
+  const h = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+  const re = /([ap]\d\d)([ap]\d\d)/g;
+  const found = [];
+  let m;
+  while ((m = re.exec(h))) found.push(m[1] + m[2]);
+  // 2回並べたうちの、そろっている方を使う（途中の1文字が抜けても大丈夫なように）
+  for (let i = 0; i + 1 < found.length; i++) if (found[i] === found[i + 1]) return [found[i].slice(0, 3), found[i].slice(3)];
+  for (const f of found) {
+    const a = f.slice(0, 3), b = f.slice(3);
+    if (IDS.includes(a) && IDS.includes(b) && a !== b) return [a, b];
+  }
+  return ['a01', 'a02'];
+}
+const [TARGET, REVEAL] = parseHash();
+
+function load(id, folder = 'works') {
+  return new Promise(res => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => res(null);
+    im.src = folder + '/' + id + '.jpg';
+  });
+}
+
+// タイル（作品の一部分）。アプリの TileVariant.variants と同じ切り出し方
+function variantRects(w, h, light) {
+  const s = Math.min(w, h), sq = [[(w - s) / 2, (h - s) / 2, s]];
+  if (h > w * 1.15) sq.push([0, 0, s], [0, h - s, s]);
+  if (w > h * 1.15) sq.push([0, 0, s], [w - s, 0, s]);
+  const half = s / 2;
+  for (const fy of [0, 0.5, 1]) for (const fx of [0, 0.5, 1]) sq.push([(w - half) * fx, (h - half) * fy, half]);
+  const third = s / 3;
+  // タイル専用は3分の1の切り出しをしない（アプリと同じ）
+  if (!light) for (const [fx, fy] of [[0.3, 0.25], [0.7, 0.4], [0.4, 0.7], [0.6, 0.85]]) sq.push([(w - third) * fx, (h - third) * fy, third]);
+  return sq;
+}
+function cutTile(v, side) {
+  const c = document.createElement('canvas'); c.width = c.height = side;
+  const x = c.getContext('2d');
+  if (v.mirrored) { x.translate(side, 0); x.scale(-1, 1); }
+  x.drawImage(v.img, v.r[0], v.r[1], v.r[2], v.r[2], 0, 0, side, side);
+  return c;
+}
+function mean(canvas) {
+  const t = document.createElement('canvas'); t.width = t.height = 6;
+  t.getContext('2d').drawImage(canvas, 0, 0, 6, 6);
+  const d = t.getContext('2d').getImageData(0, 0, 6, 6).data;
+  let r = 0, g = 0, b = 0;
+  for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+  return [r / 36, g / 36, b / 36];
+}
+
+let L = null;        // 並び {cols, rows, cells:[variantIndex or -1], colors, block:{c,r,w,h}}
+let variants = [];
+let revealImg = null, tintCanvas = null;
+let overview = null; // 1マス12ピクセルで全体を描いた画像（Bの所は除く。iPhoneのキャンバスの大きさの上限に収める）
+const OV = 12;
+
+// 絵Aの下に名前の帯を足した画像
+function targetWithName(img, label) {
+  const width = 720, ph = width * img.naturalHeight / img.naturalWidth;
+  const lines = label.split('\n'), lh = width * 0.13, band = lh * lines.length + width * 0.05;
+  const c = document.createElement('canvas'); c.width = width; c.height = Math.round(ph + band);
+  const x = c.getContext('2d');
+  x.fillStyle = 'rgb(20,18,15)'; x.fillRect(0, 0, c.width, c.height);
+  x.drawImage(img, 0, 0, width, ph);
+  x.fillStyle = 'rgb(245,237,219)'; x.textBaseline = 'middle'; x.textAlign = 'center';
+  lines.forEach((line, i) => {
+    let size = lh * 0.8;
+    do { x.font = '700 ' + size + 'px "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif'; size -= 2; }
+    while (x.measureText(line).width > width * 0.94 && size > 8);
+    x.fillText(line, width / 2, ph + width * 0.025 + lh * i + lh / 2);
+  });
+  return { canvas: c, paintingRows: (cols) => Math.min(Math.round(cols * ph / width), 9999) };
+}
+
+async function build() {
+  const [targetImg, bImg] = await Promise.all([load(TARGET), load(REVEAL)]);
+  revealImg = bImg;
+  if (!targetImg || !bImg) return;
+  // タイル：展示の作品（A・B以外）とタイル専用の作品。小さい画像（tiles/、長い辺320px）を使う
+  const pool = [...IDS, ...TILE_ONLY].filter(id => id !== TARGET && id !== REVEAL);
+  const imgs = await Promise.all(pool.map(id => load(id, 'tiles')));
+  variants = [];
+  pool.forEach((id, wi) => {
+    const img = imgs[wi]; if (!img) return;
+    variantRects(img.naturalWidth, img.naturalHeight, TILE_ONLY_SET.has(id)).forEach(r => {
+      for (const mirrored of [false, true]) variants.push({ id, wi, img, r, mirrored });
+    });
+  });
+  // 多すぎると組み立てに時間がかかるので2400枚まで（毎回ちがう組み合わせ。アプリと同じ）
+  for (let i = variants.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [variants[i], variants[j]] = [variants[j], variants[i]]; }
+  if (variants.length > MAX_TILES) variants.length = MAX_TILES;
+  variants.forEach(v => { v.small = cutTile(v, 48); v.mean = mean(v.small); });
+
+  const comp = targetWithName(targetImg, NAMES[TARGET] || '');
+  const cols = COLUMNS, rows = Math.max(1, Math.round(cols * comp.canvas.height / comp.canvas.width));
+  const paintingRows = Math.min(rows, Math.round(cols * targetImg.naturalHeight / targetImg.naturalWidth));
+  const tc = document.createElement('canvas'); tc.width = cols; tc.height = rows;
+  const tctx = tc.getContext('2d'); tctx.imageSmoothingQuality = 'high';
+  tctx.drawImage(comp.canvas, 0, 0, cols, rows);
+  const px = tctx.getImageData(0, 0, cols, rows).data;
+  const colors = [];
+  for (let i = 0; i < cols * rows; i++) colors.push([px[i * 4], px[i * 4 + 1], px[i * 4 + 2]]);
+
+  // 絵Bの範囲
+  const bAspect = Math.max(0.3, bImg.naturalWidth / bImg.naturalHeight);
+  const bh = bAspect < 0.7 ? 2 : 1;
+  const bc = document.createElement('canvas'); bc.width = 6; bc.height = 8;
+  bc.getContext('2d').drawImage(bImg, 0, 0, 6, 8);
+  const bd = bc.getContext('2d').getImageData(0, 0, 6, 8).data;
+  let bMean = [0, 0, 0]; for (let i = 0; i < bd.length; i += 4) { bMean[0] += bd[i] / 48; bMean[1] += bd[i + 1] / 48; bMean[2] += bd[i + 2] / 48; }
+  const dist = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+  let block = { c: Math.floor((cols - BW) / 2), r: Math.max(0, Math.floor((paintingRows - bh) / 2)), w: BW, h: bh }, bestD = Infinity;
+  const r0 = Math.floor(paintingRows / 5), r1 = Math.max(r0, paintingRows - Math.floor(paintingRows / 5) - bh);
+  const c0 = Math.floor(cols / 5), c1 = Math.max(c0, cols - Math.floor(cols / 5) - BW);
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    const s = [0, 0, 0];
+    for (let dr = 0; dr < bh; dr++) for (let dc = 0; dc < BW; dc++) { const p = colors[(r + dr) * cols + c + dc]; s[0] += p[0]; s[1] += p[1]; s[2] += p[2]; }
+    const n = BW * bh, d = dist([s[0] / n, s[1] / n, s[2] / n], bMean);
+    if (d < bestD) { bestD = d; block = { c, r, w: BW, h: bh }; }
+  }
+  const inBlock = (c, r) => c >= block.c && c < block.c + block.w && r >= block.r && r < block.r + block.h;
+
+  const uses = new Float64Array(variants.length);
+  const grid = new Int32Array(cols * rows).fill(-1);
+  const stamp = new Int32Array(pool.length).fill(-1);
+  const bc_ = new Float64Array(K), bi_ = new Int32Array(K);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (inBlock(c, r)) continue;
+    const cell = r * cols + c;
+    for (let dr = -2; dr <= 0; dr++) for (let dc = -2; dc <= 2; dc++) {
+      if (dr === 0 && dc >= 0) continue;
+      const rr = r + dr, cc = c + dc;
+      if (rr < 0 || cc < 0 || cc >= cols) continue;
+      const g = grid[rr * cols + cc];
+      if (g >= 0) stamp[variants[g].wi] = cell;
+    }
+    const col = colors[cell];
+    let count = 0;
+    for (let i = 0; i < variants.length; i++) {
+      const v = variants[i];
+      if (stamp[v.wi] === cell) continue;
+      const cost = Math.sqrt(dist(v.mean, col)) + uses[i] * 4;
+      if (count < K || cost < bc_[K - 1]) {
+        let j = count < K ? count++ : K - 1;
+        while (j > 0 && bc_[j - 1] > cost) { bc_[j] = bc_[j - 1]; bi_[j] = bi_[j - 1]; j--; }
+        bc_[j] = cost; bi_[j] = i;
+      }
+    }
+    const chosen = count ? bi_[Math.floor(Math.random() * count)] : 0;
+    grid[cell] = chosen; uses[chosen]++;
+  }
+  L = { cols, rows, cells: grid, colors, block };
+
+  tintCanvas = document.createElement('canvas'); tintCanvas.width = block.w; tintCanvas.height = block.h;
+  const tx = tintCanvas.getContext('2d'), td = tx.createImageData(block.w, block.h);
+  for (let dr = 0; dr < block.h; dr++) for (let dc = 0; dc < block.w; dc++) {
+    const p = colors[(block.r + dr) * cols + block.c + dc], k = (dr * block.w + dc) * 4;
+    td.data[k] = p[0]; td.data[k + 1] = p[1]; td.data[k + 2] = p[2]; td.data[k + 3] = 255;
+  }
+  tx.putImageData(td, 0, 0);
+
+  overview = document.createElement('canvas'); overview.width = cols * OV; overview.height = rows * OV;
+  const o = overview.getContext('2d');
+  for (let i = 0; i < grid.length; i++) if (grid[i] >= 0) drawCell(o, i, (i % cols) * OV, Math.floor(i / cols) * OV, OV, 'small');
+  setInitialView();
+  draw();
+}
+
+// 中・大のタイルは、作りすぎるとiPhoneのメモリが足りなくなるので、一定の数を超えたら作り直す
+let mediumMade = [], largeMade = [];
+function tileImage(v, size) {
+  if (size === 'small') return v.small;
+  if (size === 'medium') {
+    if (!v.medium) { if (mediumMade.length > 400) { mediumMade.forEach(x => x.medium = null); mediumMade = []; } v.medium = cutTile(v, 192); mediumMade.push(v); }
+    return v.medium;
+  }
+  if (!v.large) { if (largeMade.length > 40) { largeMade.forEach(x => x.large = null); largeMade = []; } v.large = cutTile(v, 512); largeMade.push(v); }
+  return v.large;
+}
+function drawCell(ctx, i, x, y, s, size) {
+  const v = variants[L.cells[i]];
+  ctx.drawImage(tileImage(v, size), x, y, s, s);
+  const c = L.colors[i];
+  ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${OVERLAY})`;
+  ctx.fillRect(x, y, s, s);
+}
+// 絵Bを、範囲いっぱいに（形が少し違う分ははみ出した所を切る）
+function drawReveal(ctx, x, y, w, h) {
+  const a = revealImg.naturalWidth / revealImg.naturalHeight;
+  let dw = w, dh = h, dx = x, dy = y;
+  if (a > w / h) { dw = h * a; dx = x + (w - dw) / 2; } else { dh = w / a; dy = y + (h - dh) / 2; }
+  ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  ctx.drawImage(revealImg, dx, dy, dw, dh);
+  ctx.restore();
+}
+
+// 表示：1マスの大きさ cell（CSSピクセル）と、モザイク左上の位置 (ox, oy)
+const canvas = document.getElementById('mosaic');
+const ctx = canvas.getContext('2d');
+let W = innerWidth, H = innerHeight, DPR = Math.min(devicePixelRatio || 1, 3);
+let cell = 10, ox = 0, oy = 0, fullCell = 1, minCell = 1;
+
+function resize() {
+  W = innerWidth; H = innerHeight;
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  draw();
+}
+addEventListener('resize', resize);
+
+function setInitialView() {
+  fullCell = W / L.block.w;                       // Bの幅が画面いっぱい
+  minCell = Math.min(W / L.cols, H / L.rows);     // 全体が画面に収まる
+  cell = fullCell;
+  ox = W / 2 - (L.block.c + L.block.w / 2) * cell; oy = H / 2 - (L.block.r + L.block.h / 2) * cell;
+}
+
+function clampView() {
+  // 最初の大きさから、さらに3倍までアップにできる（アプリと同じ）
+  cell = Math.max(minCell, Math.min(fullCell * 3, cell));
+  const mw = L.cols * cell, mh = L.rows * cell;
+  ox = mw <= W ? (W - mw) / 2 : Math.min(0, Math.max(W - mw, ox));
+  oy = mh <= H ? (H - mh) / 2 : Math.min(0, Math.max(H - mh, oy));
+}
+
+let pending = false;
+function draw() {
+  if (pending) return;
+  pending = true;
+  requestAnimationFrame(() => { pending = false; render(); });
+}
+function render() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  if (!L) {
+    // 組み立て中も、絵Bだけは先に出しておく
+    if (revealImg) { const w = W, h = w * revealImg.naturalHeight / revealImg.naturalWidth; drawReveal(ctx, 0, (H - h) / 2, w, h); }
+    return;
+  }
+  const devCell = cell * DPR;
+  if (devCell <= OV * 1.5) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(overview, ox, oy, L.cols * cell, L.rows * cell);
+  } else {
+    const size = devCell <= 48 * 2 ? 'small' : devCell <= 192 * 2 ? 'medium' : 'large';
+    const c0 = Math.max(0, Math.floor(-ox / cell)), c1 = Math.min(L.cols - 1, Math.floor((W - ox) / cell));
+    const r0 = Math.max(0, Math.floor(-oy / cell)), r1 = Math.min(L.rows - 1, Math.floor((H - oy) / cell));
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+      const i = r * L.cols + c;
+      if (L.cells[i] >= 0) drawCell(ctx, i, ox + c * cell, oy + r * cell, cell + 0.5, size);
+    }
+  }
+  // 絵B（最初は色を重ねず、全体が見えるまで縮めるとほかのマスと同じ0.5）
+  const b = L.block, bx = ox + b.c * cell, by = oy + b.r * cell, bw = b.w * cell, bh = b.h * cell;
+  drawReveal(ctx, bx, by, bw, bh);
+  const progress = Math.log(fullCell / Math.max(cell, minCell)) / Math.log(fullCell / minCell);
+  const alpha = OVERLAY * Math.min(1, Math.max(0, (progress - 0.1) / 0.6));
+  if (alpha > 0) {
+    ctx.save(); ctx.globalAlpha = alpha; ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tintCanvas, bx, by, bw, bh); ctx.restore();
+  }
+}
+
+// 指の操作：1本指で動かす、2本指で拡大・縮小
+let touches = new Map(), startDist = 0, startCell = 0, startMid = null, startO = null;
+function mid(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+function pts() { return [...touches.values()]; }
+function onStart(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) touches.set(t.identifier, { x: t.clientX, y: t.clientY });
+  beginGesture();
+}
+function beginGesture() {
+  const p = pts();
+  startCell = cell; startO = { x: ox, y: oy };
+  if (p.length >= 2) { startDist = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); startMid = mid(p[0], p[1]); }
+  else if (p.length === 1) { startMid = { ...p[0] }; startDist = 0; }
+}
+function onMove(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) if (touches.has(t.identifier)) touches.set(t.identifier, { x: t.clientX, y: t.clientY });
+  if (!L) return;
+  const p = pts();
+  if (p.length >= 2 && startDist > 0) {
+    const m = mid(p[0], p[1]);
+    const k = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) / startDist;
+    cell = startCell * k;
+    clampView();
+    const f = cell / startCell;
+    ox = m.x - (startMid.x - startO.x) * f; oy = m.y - (startMid.y - startO.y) * f;
+  } else if (p.length === 1 && startMid) {
+    ox = startO.x + p[0].x - startMid.x; oy = startO.y + p[0].y - startMid.y;
+  }
+  clampView();
+  draw();
+}
+function onEnd(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) touches.delete(t.identifier);
+  beginGesture();
+}
+for (const el of [canvas, document.body]) {
+  el.addEventListener('touchstart', onStart, { passive: false });
+  el.addEventListener('touchmove', onMove, { passive: false });
+  el.addEventListener('touchend', onEnd, { passive: false });
+  el.addEventListener('touchcancel', onEnd, { passive: false });
+}
+// iPhoneのSafariの、ページ全体の拡大を止める
+document.addEventListener('gesturestart', e => e.preventDefault());
+
+resize();
+build();
+</script>
+</body>
+</html>
