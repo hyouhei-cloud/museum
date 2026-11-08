@@ -283,8 +283,9 @@ function resize() {
 addEventListener('resize', resize);
 if (window.visualViewport) visualViewport.addEventListener('resize', resize);
 
-// 全体が見える所まで縮めた時、上下に少し余白を残す（下は、Safariの浮いているバーに名前が隠れないように広め）
-const PAD_T = 0.04, PAD_B = 0.14;
+// 全体が見える所まで縮めた時の上下の余白。2026-11-09 iPhone（iOS 26）のSafariで測ると、ページの高さ（innerHeight）は
+// 下のバーの上で終わっていた → バーの分の余白はいらない。できるだけ画面いっぱいに（ホッシー☆要望）
+const PAD_T = 0.01, PAD_B = 0.01;
 function fitLimits() {
   fullCell = W / L.block.w;
   minCell = Math.min(W / L.cols, H * (1 - PAD_T - PAD_B) / L.rows);
