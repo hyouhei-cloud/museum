@@ -105,10 +105,23 @@ function targetWithName(img, label) {
   return { canvas: c, paintingRows: (cols) => Math.min(Math.round(cols * ph / width), 9999) };
 }
 
+// 組み立ての途中で、画面を描く時間をゆずる（その間も絵Bが見え、指の操作も止まらない）
+const breathe = () => new Promise(r => setTimeout(r, 0));
+
 async function build() {
-  const [targetImg, bImg] = await Promise.all([load(TARGET), load(REVEAL)]);
-  revealImg = bImg;
-  if (!targetImg || !bImg) return;
+  // 2026-11-09 実機：相手のスマホで真っ黒のまま止まった。前は、モザイクが全部できるまで何も描いていなかった
+  // → 絵Bを最初に読み込んで、すぐ出す。組み立ては後ろで少しずつ。途中で失敗しても絵Bは出たまま
+  const targetPromise = load(TARGET);
+  revealImg = await load(REVEAL);
+  draw();
+  const targetImg = await targetPromise;
+  if (!targetImg || !revealImg) return;
+  try { await buildMosaic(targetImg, revealImg); }
+  catch (e) { console.error(e); L = null; draw(); }
+}
+
+async function buildMosaic(targetImg, bImg) {
+  await breathe();
   // タイル：展示の作品（A・B以外）とタイル専用の作品。小さい画像（tiles/、長い辺320px）を使う
   const pool = [...IDS, ...TILE_ONLY].filter(id => id !== TARGET && id !== REVEAL);
   const imgs = await Promise.all(pool.map(id => load(id, 'tiles')));
@@ -122,7 +135,25 @@ async function build() {
   // 多すぎると組み立てに時間がかかるので2400枚まで（毎回ちがう組み合わせ。アプリと同じ）
   for (let i = variants.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [variants[i], variants[j]] = [variants[j], variants[i]]; }
   if (variants.length > MAX_TILES) variants.length = MAX_TILES;
-  variants.forEach(v => { v.small = cutTile(v, 48); v.mean = mean(v.small); });
+  // 平均の色は、小さな見本を1枚の画像に並べて、まとめて1回で読む
+  // （1枚ずつ読むと、iPhoneでは1回ごとに時間がかかる）
+  const AC = 60, rowsA = Math.ceil(variants.length / AC);
+  const atlas = document.createElement('canvas'); atlas.width = AC * 6; atlas.height = Math.max(1, rowsA) * 6;
+  const ax = atlas.getContext('2d');
+  for (let i = 0; i < variants.length; i++) {
+    const v = variants[i];
+    v.small = cutTile(v, 48);
+    ax.drawImage(v.small, (i % AC) * 6, Math.floor(i / AC) * 6, 6, 6);
+    if (i % 200 === 199) await breathe();
+  }
+  const ad = ax.getImageData(0, 0, atlas.width, atlas.height).data;
+  for (let i = 0; i < variants.length; i++) {
+    const x0 = (i % AC) * 6, y0 = Math.floor(i / AC) * 6;
+    let r = 0, g = 0, b = 0;
+    for (let y = 0; y < 6; y++) for (let x = 0; x < 6; x++) { const k = ((y0 + y) * atlas.width + x0 + x) * 4; r += ad[k]; g += ad[k + 1]; b += ad[k + 2]; }
+    variants[i].mean = [r / 36, g / 36, b / 36];
+  }
+  atlas.width = atlas.height = 1;
 
   const comp = targetWithName(targetImg, NAMES[TARGET] || '');
   const cols = COLUMNS, rows = Math.max(1, Math.round(cols * comp.canvas.height / comp.canvas.width));
@@ -157,7 +188,9 @@ async function build() {
   const grid = new Int32Array(cols * rows).fill(-1);
   const stamp = new Int32Array(pool.length).fill(-1);
   const bc_ = new Float64Array(K), bi_ = new Int32Array(K);
-  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+  for (let r = 0; r < rows; r++) {
+   if (r % 8 === 7) await breathe();
+   for (let c = 0; c < cols; c++) {
     if (inBlock(c, r)) continue;
     const cell = r * cols + c;
     for (let dr = -2; dr <= 0; dr++) for (let dc = -2; dc <= 2; dc++) {
@@ -181,7 +214,9 @@ async function build() {
     }
     const chosen = count ? bi_[Math.floor(Math.random() * count)] : 0;
     grid[cell] = chosen; uses[chosen]++;
+   }
   }
+  await breathe();
   L = { cols, rows, cells: grid, colors, block };
 
   tintCanvas = document.createElement('canvas'); tintCanvas.width = block.w; tintCanvas.height = block.h;
@@ -204,10 +239,10 @@ let mediumMade = [], largeMade = [];
 function tileImage(v, size) {
   if (size === 'small') return v.small;
   if (size === 'medium') {
-    if (!v.medium) { if (mediumMade.length > 400) { mediumMade.forEach(x => x.medium = null); mediumMade = []; } v.medium = cutTile(v, 192); mediumMade.push(v); }
+    if (!v.medium) { if (mediumMade.length > 160) { mediumMade.forEach(x => x.medium = null); mediumMade = []; } v.medium = cutTile(v, 192); mediumMade.push(v); }
     return v.medium;
   }
-  if (!v.large) { if (largeMade.length > 40) { largeMade.forEach(x => x.large = null); largeMade = []; } v.large = cutTile(v, 512); largeMade.push(v); }
+  if (!v.large) { if (largeMade.length > 20) { largeMade.forEach(x => x.large = null); largeMade = []; } v.large = cutTile(v, 512); largeMade.push(v); }
   return v.large;
 }
 function drawCell(ctx, i, x, y, s, size) {
