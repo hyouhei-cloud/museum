@@ -272,8 +272,9 @@ let cell = 10, ox = 0, oy = 0, fullCell = 1, minCell = 1;
 // 画面の高さ（100vh）は、Safariの下のバーの分を引いていない高さになるため、描いた絵が引き伸ばされていた
 // → キャンバスの見た目の大きさも、描く大きさと同じ数字にそろえる
 function resize() {
-  const vv = window.visualViewport;
-  W = Math.round(vv ? vv.width : innerWidth); H = Math.round(vv ? vv.height : innerHeight);
+  // 2026-11-09 実機：縮めきった時に小さく止まることがあった（キーボードの帯が出ている間は visualViewport が低くなるため）
+  // → キーボードで変わらない、ページの高さ（innerHeight）を使う。縮めきった大きさは、いつも同じ（無駄な余白なし）
+  W = innerWidth; H = innerHeight;
   canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
   canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
   if (L) { const keep = cell <= minCell * 1.001; fitLimits(); if (keep) cell = minCell; clampView(); }
